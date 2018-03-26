@@ -2,6 +2,7 @@ import helperstuff
 import inspect
 import json
 import re
+import os
 import sys
 from types import FunctionType, MethodType, LambdaType
 
@@ -34,18 +35,20 @@ if __name__ == '__main__':
     def filter_methods(cls):
         return [x for x in cls.__dict__.keys() if callable(getattr(cls, x))]
 
-    module_title = "helperstuff"
-    class_name = "HelperClass"
-    module_obj = sys.modules[module_title]
-    module_members = dict(inspect.getmembers(module_obj))
-    for k, class_obj in module_members.items():
-        if not inspect.isclass(class_obj):
+    for module_title, module_obj in sys.modules.items():
+        if not inspect.ismodule(module_obj) or not hasattr(
+                module_obj, "__file__") or not module_obj.__file__.startswith(
+                    os.getcwd()):
             continue
-        method_names = filter_methods(class_obj)
-        for method_name in method_names:
-            func = getattr(class_obj, method_name)
-            setattr(class_obj, method_name,
-                    method_wrapper_outer(func, module_title, class_name))
+        module_members = dict(inspect.getmembers(module_obj))
+        for class_name, class_obj in module_members.items():
+            if not inspect.isclass(class_obj):
+                continue
+            method_names = filter_methods(class_obj)
+            for method_name in method_names:
+                func = getattr(class_obj, method_name)
+                setattr(class_obj, method_name,
+                        method_wrapper_outer(func, module_title, class_name))
     helperstuff.HelperClass.my_func([55])
 
 

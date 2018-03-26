@@ -8,11 +8,15 @@ from types import FunctionType, MethodType, LambdaType
 
 
 def main():
-    def method_wrapper_outer(fnc, module_title, class_name):
+    def method_wrapper_outer(fnc, module_title, class_name, test_path):
         def method_wrapper(*args, **kwargs):
             in_args = str(args)
             in_kwargs = str(kwargs)
-            file_handle = open("testcase.py", "w+")
+            test_path_parent = os.path.abspath(
+                os.path.join(test_path, os.pardir))
+            if not os.path.exists(test_path_parent):
+                os.makedirs(test_path_parent)
+            file_handle = open(test_path, "w+")
             res = fnc(*args, **kwargs)
             file_handle.write("""import unittest
 from {} import {}
@@ -40,6 +44,12 @@ if __name__ == '__main__':
                 module_obj, "__file__") or not module_obj.__file__.startswith(
                     os.getcwd()):
             continue
+        test_path = os.path.join(
+            "",  #"test",
+            os.path.relpath(module_obj.__file__, os.getcwd()))
+        test_path = os.path.join(
+            os.path.abspath(os.path.join(test_path, os.pardir)),
+            "test_" + os.path.split(test_path)[1])
         module_members = dict(inspect.getmembers(module_obj))
         for class_name, class_obj in module_members.items():
             if not inspect.isclass(class_obj):
@@ -48,7 +58,8 @@ if __name__ == '__main__':
             for method_name in method_names:
                 func = getattr(class_obj, method_name)
                 setattr(class_obj, method_name,
-                        method_wrapper_outer(func, module_title, class_name))
+                        method_wrapper_outer(func, module_title, class_name,
+                                             test_path))
     helperstuff.HelperClass.my_func([55])
 
 

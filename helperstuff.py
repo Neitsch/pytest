@@ -1,5 +1,8 @@
 class HelperClass(object):
-    @staticmethod
-    def my_func(lst):
-        lst.append(3)
+    def __init__(self, number=6):
+        self.hello = []
+        self.hello.append(number)
+
+    def my_func(self, lst):
+        lst.extend(self.hello)
         return lst

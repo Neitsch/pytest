@@ -38,3 +38,7 @@ env/
 .ropeproject
 .idea
 .hypothesis
+
+# Auto generated test files that could cause merge conflicts
+# Arent needed in source
+test_*

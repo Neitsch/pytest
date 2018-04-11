@@ -1,11 +1,12 @@
 import atexit
 from collections import namedtuple
-from mock import patch
 import sys
 
 CALL_DATA = namedtuple("CallData", ["args", "kwargs", "output", "function"])
 GETATTR_DATA = namedtuple("GetAttrData", ["name", "output"])
-SETATTR_DATA = namedtuple("GetAttrData", ["name", "input"])
+SETATTR_DATA = namedtuple("SetAttrData", ["name", "input"])
+SPECIAL_ATTR_DATA = namedtuple("SpecialAttrData",
+                               ["name", "args", "kwargs", "output"])
 
 
 def serialize_value(val):
@@ -27,7 +28,18 @@ def serialize_value(val):
             if a.name != "__class__":
                 mock_attrs.append("{}={}".format(a.name,
                                                  serialize_value(a.output)))
-
+        iter_attr = None
+        for a in object.__getattribute__(val, "_special_data"):
+            if a.name == "__call__":
+                mock_attrs.append("return_value={}".format(
+                    serialize_value(a.output)))
+            if a.name == "__iter__":
+                iter_attr = []
+                for b in object.__getattribute__(a.output, "_special_data"):
+                    if b.name == "__next__":
+                        iter_attr.append(b.output)
+        if iter_attr is not None:
+            return "iter({})".format(serialize_value(iter_attr))
         return "MagicMock({})".format(", ".join(mock_attrs))
 
 
@@ -67,13 +79,17 @@ def copy_call_data(val):
 
 
 class Proxy(object):
-    __slots__ = ["_obj", "_track_on", "__weakref__", "_set_data", "_get_data"]
+    __slots__ = [
+        "_obj", "_track_on", "__weakref__", "_set_data", "_get_data",
+        "_special_data"
+    ]
 
     def __init__(self, obj, track_on):
         object.__setattr__(self, "_obj", obj)
         object.__setattr__(self, "_track_on", track_on)
         object.__setattr__(self, "_set_data", [])
         object.__setattr__(self, "_get_data", [])
+        object.__setattr__(self, "_special_data", [])
 
     #
     # proxying (special cases)
@@ -86,11 +102,9 @@ class Proxy(object):
         return_value_copy = copy_call_data(return_value)
         object.__getattribute__(self, "_get_data").append(
             GETATTR_DATA(name, return_value_copy))
-        print("Get attribute ", id(self), name, return_value_copy)
         return return_value
 
     def __delattr__(self, name):
-        print("Del attribute ", id(self), name)
         delattr(object.__getattribute__(self, "_obj"), name)
 
     def __setattr__(self, name, value):
@@ -99,18 +113,14 @@ class Proxy(object):
         setattr(object.__getattribute__(self, "_obj"), name, set_value)
         object.__getattribute__(self, "_set_data").append(
             SETATTR_DATA(name, set_value_copy))
-        print("Set attribute ", id(self), name, set_value_copy)
 
     def __nonzero__(self):
-        print("__nonzero__")
         return bool(object.__getattribute__(self, "_obj"))
 
     def __str__(self):
-        print("__str__")
         return str(object.__getattribute__(self, "_obj"))
 
     def __repr__(self):
-        print("__repr__")
         return repr(object.__getattribute__(self, "_obj"))
 
     #
@@ -163,6 +173,7 @@ class Proxy(object):
         '__mul__',
         '__ne__',
         '__neg__',
+        '__next__',
         '__oct__',
         '__or__',
         '__pos__',
@@ -200,10 +211,18 @@ class Proxy(object):
 
         def make_method(name):
             def method(self, *args, **kw):
+                args_value = copy_and_placehold_data(args)
+                args_value_copy = copy_call_data(args_value)
+                kwargs_value = copy_and_placehold_data(kw)
+                kwargs_value_copy = copy_call_data(kwargs_value)
                 output = getattr(object.__getattribute__(self, "_obj"),
-                                 name)(*args, **kw)
-                print("Special ", name, args, kw, " ==> ", output)
-                return output
+                                 name)(*args_value, **kwargs_value)
+                output_value = copy_and_placehold_data(output)
+                output_value_copy = copy_call_data(output_value)
+                object.__getattribute__(self, "_special_data").append(
+                    SPECIAL_ATTR_DATA(name, args_value_copy, kwargs_value_copy,
+                                      output_value_copy))
+                return output_value
 
             return method
 
@@ -243,11 +262,12 @@ def track_class():
             kwargs = copy_and_placehold_data(kwargs)
             result = fnc(*copy_call_data(args), **copy_call_data(kwargs))
             call_data = CALL_DATA(
-                args=serialize_value(args),
+                args=[serialize_value(arg) for arg in args],
                 kwargs=serialize_value(kwargs),
                 output=serialize_value(result),
                 function=fnc)
             list_of_calls.append(call_data)
+            write_testcases()
             return result
 
         return method_wrapper
@@ -261,7 +281,8 @@ def track_class():
 
         @atexit.register
         def write_testcases():
-            if "@pytest_ar" in globals():
+            print(globals().keys())
+            if "@pytest_ar" in globals().keys():
                 return
             with open("test_me.py", "w+") as file_handle:
                 file_handle.write("""from mock import MagicMock
@@ -276,12 +297,12 @@ class Test(object):
                 for call_data in list_of_calls:
                     file_handle.write(
                         """   def test_{function_name}_{counter}(self):
-        assert {output} == {function_call}(*{args}, **{kwargs})
+        assert {output} == {function_call}({args}, **{kwargs})
 """.format(function_call=call_data.function.__qualname__,
                     function_name=call_data.function.__name__,
                     counter=counter,
                     output=call_data.output,
-                    args=call_data.args,
+                    args=", ".join(call_data.args),
                     kwargs=call_data.kwargs))
                     counter += 1
 

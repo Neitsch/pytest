@@ -1,6 +1,9 @@
 import atexit
 from collections import namedtuple
 import sys
+import os
+import autopep8
+from io import StringIO
 
 CALL_DATA = namedtuple("CallData", ["args", "kwargs", "output", "function"])
 GETATTR_DATA = namedtuple("GetAttrData", ["name", "output"])
@@ -279,32 +282,41 @@ def track_class():
         list_of_calls = []
         file_path = sys.modules[class_obj.__module__].__file__
 
-        @atexit.register
         def write_testcases():
-            print(globals().keys())
             if "@pytest_ar" in globals().keys():
                 return
-            with open("test_me.py", "w+") as file_handle:
-                file_handle.write("""from mock import MagicMock
+            file_handle = StringIO()
+            file_handle.write("""from mock import MagicMock
 from {module_import_path} import {class_name}
 
 class Test(object):
 """.format(
-                    module_import_path=file_path[:-3],
-                    class_name=class_obj.__name__,
-                ))
-                counter = 0
-                for call_data in list_of_calls:
-                    file_handle.write(
-                        """   def test_{function_name}_{counter}(self):
-        assert {output} == {function_call}({args}, **{kwargs})
+                module_import_path=os.path.relpath(file_path,
+                                                   os.path.commonprefix([
+                                                       file_path,
+                                                       os.getcwd()
+                                                   ]))[:-3].replace("/", "."),
+                class_name=class_obj.__name__,
+            ))
+            counter = 0
+            for call_data in list_of_calls:
+                file_handle.write(
+                    """   def test_{function_name}_{counter}(self):
+    assert {output} == {function_call}({args}, **{kwargs})
 """.format(function_call=call_data.function.__qualname__,
-                    function_name=call_data.function.__name__,
-                    counter=counter,
-                    output=call_data.output,
-                    args=", ".join(call_data.args),
-                    kwargs=call_data.kwargs))
-                    counter += 1
+                function_name=call_data.function.__name__,
+                counter=counter,
+                output=call_data.output,
+                args=", ".join(call_data.args),
+                kwargs=call_data.kwargs))
+                counter += 1
+            res = autopep8.fix_code(file_handle.getvalue(), {
+                "aggressive": 10,
+                "experimental": True
+            })
+            with open("test_{}.py".format(class_obj.__name__),
+                      "w") as real_file:
+                real_file.write(res)
 
         method_names = filter_methods(class_obj)
         for method_name in method_names:

@@ -1,26 +1,32 @@
-import atexit
-from collections import namedtuple
+from collections import namedtuple, Counter
 import sys
 import os
 import autopep8
 from io import StringIO
 
-CALL_DATA = namedtuple("CallData", ["args", "kwargs", "output", "function"])
+CALL_DATA = namedtuple(
+    "CallData", ["args", "kwargs", "output", "function", "dependencies"])
 GETATTR_DATA = namedtuple("GetAttrData", ["name", "output"])
 SETATTR_DATA = namedtuple("SetAttrData", ["name", "input"])
 SPECIAL_ATTR_DATA = namedtuple("SpecialAttrData",
                                ["name", "args", "kwargs", "output"])
 
 
-def serialize_value(val):
+def serialize_value(val, dep_tracker=lambda x: x):
     if val is None:
         return "None"
     if type(val) == dict:
-        return {k: serialize_value(v) for k, v in val.items()}
+        return {
+            serialize_value(k, dep_tracker): dep_tracker(
+                serialize_value(v, dep_tracker))
+            for k, v in val.items()
+        }
     if type(val) == list:
-        return "[" + ", ".join([serialize_value(v) for v in val]) + "]"
+        return "[" + ", ".join([serialize_value(v, dep_tracker)
+                                for v in val]) + "]"
     if type(val) == tuple:
-        return "(" + ", ".join([serialize_value(v) for v in val]) + ")"
+        return "(" + ", ".join([serialize_value(v, dep_tracker)
+                                for v in val]) + ")"
     if type(val) in (int, float, bool):
         return str(val)
     if type(val) == str:
@@ -29,20 +35,23 @@ def serialize_value(val):
         mock_attrs = []
         for a in object.__getattribute__(val, "_get_data"):
             if a.name != "__class__":
-                mock_attrs.append("{}={}".format(a.name,
-                                                 serialize_value(a.output)))
+                mock_attrs.append("{}={}".format(
+                    a.name,
+                    dep_tracker(
+                        serialize_value(a.output, dep_tracker), a.name)))
         iter_attr = None
         for a in object.__getattribute__(val, "_special_data"):
             if a.name == "__call__":
                 mock_attrs.append("return_value={}".format(
-                    serialize_value(a.output)))
+                    dep_tracker(
+                        serialize_value(a.output, dep_tracker), a.name)))
             if a.name == "__iter__":
                 iter_attr = []
                 for b in object.__getattribute__(a.output, "_special_data"):
                     if b.name == "__next__":
                         iter_attr.append(b.output)
         if iter_attr is not None:
-            return "iter({})".format(serialize_value(iter_attr))
+            return "iter({})".format(serialize_value(iter_attr, dep_tracker))
         return "MagicMock({})".format(", ".join(mock_attrs))
 
 
@@ -304,6 +313,24 @@ class Proxy(object):
         return ins
 
 
+class DependencyTracker(object):
+    def __init__(self):
+        self.dependencies = []
+        self.num_occurence = Counter()
+
+    def add(self, value, hint="id"):
+        self.num_occurence[hint] += 1
+        if self.num_occurence[hint] == 1:
+            title = hint
+        else:
+            title = "{}_{}".format(hint, self.num_occurence[hint])
+        self.dependencies.append("{} = {}".format(title, value))
+        return title
+
+    def get_lines(self):
+        return self.dependencies
+
+
 def track_class():
     def method_wrapper_outer(fnc, list_of_calls, write_testcases):
         if "@pytest_ar" in globals().keys():
@@ -314,10 +341,18 @@ def track_class():
             args = copy_and_placehold_data(args, track_on)
             kwargs = copy_and_placehold_data(kwargs, track_on)
             result = fnc(*copy_call_data(args), **copy_call_data(kwargs))
+            dep_tracker = DependencyTracker()
             call_data = CALL_DATA(
-                args=[serialize_value(arg) for arg in args],
-                kwargs=serialize_value(kwargs),
-                output=serialize_value(result),
+                args=[
+                    dep_tracker.add(
+                        serialize_value(arg, dep_tracker.add), "arg")
+                    for arg in args
+                ],
+                kwargs=dep_tracker.add(
+                    serialize_value(kwargs, dep_tracker.add), "kwargs"),
+                output=dep_tracker.add(
+                    serialize_value(result, dep_tracker.add), "output"),
+                dependencies=dep_tracker,
                 function=fnc)
             list_of_calls.append(call_data)
             write_testcases()
@@ -339,7 +374,7 @@ def track_class():
             file_handle.write("""from mock import MagicMock
 from {module_import_path} import {class_name}
 
-class Test(object):
+class Test{class_name}(object):
 """.format(
                 module_import_path=os.path.relpath(file_path,
                                                    os.path.commonprefix([
@@ -352,12 +387,15 @@ class Test(object):
             for call_data in list_of_calls:
                 file_handle.write(
                     """   def test_{function_name}_{counter}(self):
+    {dependencies}
     assert {output} == {function_call}({args}, **{kwargs})
 """.format(function_call=call_data.function.__qualname__,
                 function_name=call_data.function.__name__,
                 counter=counter,
+                dependencies="\n    ".join(call_data.dependencies.get_lines()),
                 output=call_data.output,
                 args=", ".join(call_data.args),
+                class_name=class_obj.__name__,
                 kwargs=call_data.kwargs))
                 counter += 1
             res = autopep8.fix_code(file_handle.getvalue(), {

@@ -10,14 +10,16 @@ GETATTR_DATA = namedtuple("GetAttrData", ["name", "output"])
 SETATTR_DATA = namedtuple("SetAttrData", ["name", "input"])
 SPECIAL_ATTR_DATA = namedtuple("SpecialAttrData",
                                ["name", "args", "kwargs", "output"])
+PRIMITIVES = (int, float, bool)
 
 
-def serialize_value(val, dep_tracker=lambda x: x):
+def serialize_value(val, dep_tracker):
     if val is None:
+        dep_tracker.was_primitive()
         return "None"
     if type(val) == dict:
         return {
-            serialize_value(k, dep_tracker): dep_tracker(
+            serialize_value(k, dep_tracker): dep_tracker.add(
                 serialize_value(v, dep_tracker))
             for k, v in val.items()
         }
@@ -27,9 +29,12 @@ def serialize_value(val, dep_tracker=lambda x: x):
     if type(val) == tuple:
         return "(" + ", ".join([serialize_value(v, dep_tracker)
                                 for v in val]) + ")"
-    if type(val) in (int, float, bool):
+    if type(val) in PRIMITIVES:
+        dep_tracker.was_primitive()
         return str(val)
     if type(val) == str:
+        if len(str) < 16:
+            dep_tracker.was_primitive()
         return "'{}'".format(val)
     if hasattr(val, '__class__'):
         mock_attrs = []
@@ -37,14 +42,15 @@ def serialize_value(val, dep_tracker=lambda x: x):
             if a.name != "__class__":
                 mock_attrs.append("{}={}".format(
                     a.name,
-                    dep_tracker(
+                    dep_tracker.add(
                         serialize_value(a.output, dep_tracker), a.name)))
         iter_attr = None
         for a in object.__getattribute__(val, "_special_data"):
             if a.name == "__call__":
                 mock_attrs.append("return_value={}".format(
-                    dep_tracker(
-                        serialize_value(a.output, dep_tracker), a.name)))
+                    dep_tracker.add(
+                        serialize_value(a.output, dep_tracker),
+                        "return_value")))
             if a.name == "__iter__":
                 iter_attr = []
                 for b in object.__getattribute__(a.output, "_special_data"):
@@ -67,7 +73,7 @@ def copy_and_placehold_data(val, track_on):
         return [copy_and_placehold_data(v, track_on) for v in val]
     if type(val) == tuple:
         return tuple([copy_and_placehold_data(v, track_on) for v in val])
-    if type(val) in (int, float, bool):
+    if type(val) in PRIMITIVES:
         return val
     if type(val) == str:
         return str(val)
@@ -317,8 +323,12 @@ class DependencyTracker(object):
     def __init__(self):
         self.dependencies = []
         self.num_occurence = Counter()
+        self.prim = False
 
     def add(self, value, hint="id"):
+        if self.prim:
+            self.prim = False
+            return value
         self.num_occurence[hint] += 1
         if self.num_occurence[hint] == 1:
             title = hint
@@ -329,6 +339,9 @@ class DependencyTracker(object):
 
     def get_lines(self):
         return self.dependencies
+
+    def was_primitive(self):
+        self.prim = True
 
 
 def track_class():
@@ -344,14 +357,16 @@ def track_class():
             dep_tracker = DependencyTracker()
             call_data = CALL_DATA(
                 args=[
-                    dep_tracker.add(
-                        serialize_value(arg, dep_tracker.add), "arg")
+                    dep_tracker.add(serialize_value(arg, dep_tracker), "arg")
                     for arg in args
                 ],
-                kwargs=dep_tracker.add(
-                    serialize_value(kwargs, dep_tracker.add), "kwargs"),
+                kwargs={
+                    serialize_value(k, dep_tracker): dep_tracker.add(
+                        serialize_value(kwarg, dep_tracker), "kwargs")
+                    for k, kwarg in kwargs
+                },
                 output=dep_tracker.add(
-                    serialize_value(result, dep_tracker.add), "output"),
+                    serialize_value(result, dep_tracker), "output"),
                 dependencies=dep_tracker,
                 function=fnc)
             list_of_calls.append(call_data)
@@ -388,7 +403,7 @@ class Test{class_name}(object):
                 file_handle.write(
                     """   def test_{function_name}_{counter}(self):
     {dependencies}
-    assert {output} == {function_call}({args}, **{kwargs})
+    assert {output} == {function_call}({args}{kwargs})
 """.format(function_call=call_data.function.__qualname__,
                 function_name=call_data.function.__name__,
                 counter=counter,
@@ -396,7 +411,9 @@ class Test{class_name}(object):
                 output=call_data.output,
                 args=", ".join(call_data.args),
                 class_name=class_obj.__name__,
-                kwargs=call_data.kwargs))
+                kwargs=(", " + ", ".join(
+                ["{}={}".format(k, a) for k, a in call_data.kwargs]))
+                if call_data.kwargs else ""))
                 counter += 1
             res = autopep8.fix_code(file_handle.getvalue(), {
                 "aggressive": 10,

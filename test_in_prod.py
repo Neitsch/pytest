@@ -3,6 +3,7 @@ import sys
 import os
 import autopep8
 from io import StringIO
+from functools import reduce
 
 CALL_DATA = namedtuple(
     "CallData", ["args", "kwargs", "output", "function", "dependencies"])
@@ -11,54 +12,77 @@ SETATTR_DATA = namedtuple("SetAttrData", ["name", "input"])
 SPECIAL_ATTR_DATA = namedtuple("SpecialAttrData",
                                ["name", "args", "kwargs", "output"])
 PRIMITIVES = (int, float, bool)
+ALL_PRIMITIVES = (int, float, bool, str)
 
 
-def serialize_value(val, dep_tracker):
+def serialize_value(val, dep_tracker, name_hint=None):
     if val is None:
-        dep_tracker.was_primitive()
         return "None"
     if type(val) == dict:
-        return {
-            serialize_value(k, dep_tracker): dep_tracker.add(
-                serialize_value(v, dep_tracker))
+        return "{" + ", ".join([
+            "{}: {}".format(
+                serialize_value(k, dep_tracker,
+                                "dict_{}_key".format(name_hint)),
+                serialize_value(v, dep_tracker,
+                                "dict_{}_value".format(name_hint)))
             for k, v in val.items()
-        }
+        ]) + "}"
     if type(val) == list:
-        return "[" + ", ".join([serialize_value(v, dep_tracker)
-                                for v in val]) + "]"
+        return "[" + ", ".join([
+            serialize_value(v, dep_tracker, "arr_{}".format(name_hint))
+            for v in val
+        ]) + "]"
     if type(val) == tuple:
-        return "(" + ", ".join([serialize_value(v, dep_tracker)
-                                for v in val]) + ")"
+        return "(" + ", ".join([
+            serialize_value(v, dep_tracker, "tuple_{}".format(name_hint))
+            for v in val
+        ]) + ")"
     if type(val) in PRIMITIVES:
-        dep_tracker.was_primitive()
         return str(val)
     if type(val) == str:
-        if len(str) < 16:
-            dep_tracker.was_primitive()
         return "'{}'".format(val)
     if hasattr(val, '__class__'):
         mock_attrs = []
+        mock_assert = None
         for a in object.__getattribute__(val, "_get_data"):
             if a.name != "__class__":
-                mock_attrs.append("{}={}".format(
-                    a.name,
-                    dep_tracker.add(
-                        serialize_value(a.output, dep_tracker), a.name)))
+                mock_attrs.append("{}={}".format(a.name,
+                                                 serialize_value(
+                                                     a.output, dep_tracker,
+                                                     a.name)))
         iter_attr = None
         for a in object.__getattribute__(val, "_special_data"):
             if a.name == "__call__":
                 mock_attrs.append("return_value={}".format(
-                    dep_tracker.add(
-                        serialize_value(a.output, dep_tracker),
-                        "return_value")))
+                    serialize_value(a.output, dep_tracker, "return_value")))
+                mock_assert = (list(a.args), a.kwargs)
             if a.name == "__iter__":
                 iter_attr = []
                 for b in object.__getattribute__(a.output, "_special_data"):
                     if b.name == "__next__":
                         iter_attr.append(b.output)
         if iter_attr is not None:
-            return "iter({})".format(serialize_value(iter_attr, dep_tracker))
-        return "MagicMock({})".format(", ".join(mock_attrs))
+            return "iter({})".format(
+                serialize_value(iter_attr, dep_tracker, "iter"))
+        mock_thing = dep_tracker.add("MagicMock({})".format(
+            ", ".join(mock_attrs)), name_hint)
+        if mock_assert is not None:
+            all_primitives = (reduce(
+                lambda acc, x: acc and (type(x) in ALL_PRIMITIVES), mock_assert[0],
+                True
+            ) and reduce(
+                lambda acc, x: acc and (type(x[0]) in ALL_PRIMITIVES) and (type(x[1]) in ALL_PRIMITIVES),
+                mock_assert[1].items(), True))
+            if all_primitives:
+                dep_tracker.assert_called(
+                    mock_thing,
+                    (serialize_value(mock_assert[0], dep_tracker,
+                                     "assert_args_{}".format(name_hint)),
+                     serialize_value(mock_assert[1], dep_tracker,
+                                     "assert_kwargs_{}".format(name_hint))))
+            else:
+                dep_tracker.assert_called(mock_thing)
+        return mock_thing
 
 
 def copy_and_placehold_data(val, track_on):
@@ -324,6 +348,7 @@ class DependencyTracker(object):
         self.dependencies = []
         self.num_occurence = Counter()
         self.prim = False
+        self.asserts = []
 
     def add(self, value, hint="id"):
         if self.prim:
@@ -340,8 +365,15 @@ class DependencyTracker(object):
     def get_lines(self):
         return self.dependencies
 
-    def was_primitive(self):
-        self.prim = True
+    def get_asserts(self):
+        return self.asserts
+
+    def assert_called(self, identifier, arguments=None):
+        if arguments:
+            self.asserts.append("{}.assert_called_with(*{}, **{})".format(
+                identifier, arguments[0], arguments[1]))
+        else:
+            self.asserts.append("{}.assert_called_once()".format(identifier))
 
 
 def track_class():
@@ -357,16 +389,14 @@ def track_class():
             dep_tracker = DependencyTracker()
             call_data = CALL_DATA(
                 args=[
-                    dep_tracker.add(serialize_value(arg, dep_tracker), "arg")
-                    for arg in args
+                    serialize_value(arg, dep_tracker, "arg") for arg in args
                 ],
                 kwargs={
-                    serialize_value(k, dep_tracker): dep_tracker.add(
-                        serialize_value(kwarg, dep_tracker), "kwargs")
+                    serialize_value(k, dep_tracker, "kwarg_key"):
+                    serialize_value(kwarg, dep_tracker, "kwarg_value")
                     for k, kwarg in kwargs
                 },
-                output=dep_tracker.add(
-                    serialize_value(result, dep_tracker), "output"),
+                output=serialize_value(result, dep_tracker, "output"),
                 dependencies=dep_tracker,
                 function=fnc)
             list_of_calls.append(call_data)
@@ -404,6 +434,7 @@ class Test{class_name}(object):
                     """   def test_{function_name}_{counter}(self):
     {dependencies}
     assert {output} == {function_call}({args}{kwargs})
+    {asserts}
 """.format(function_call=call_data.function.__qualname__,
                 function_name=call_data.function.__name__,
                 counter=counter,
@@ -411,6 +442,7 @@ class Test{class_name}(object):
                 output=call_data.output,
                 args=", ".join(call_data.args),
                 class_name=class_obj.__name__,
+                asserts="\n    ".join(call_data.dependencies.get_asserts()),
                 kwargs=(", " + ", ".join(
                 ["{}={}".format(k, a) for k, a in call_data.kwargs]))
                 if call_data.kwargs else ""))

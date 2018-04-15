@@ -46,21 +46,24 @@ def serialize_value(val):
         return "MagicMock({})".format(", ".join(mock_attrs))
 
 
-def copy_and_placehold_data(val):
+def copy_and_placehold_data(val, track_on):
     if val is None:
         return None
     if type(val) == dict:
-        return {k: copy_and_placehold_data(v) for k, v in val.items()}
+        return {
+            k: copy_and_placehold_data(v, track_on)
+            for k, v in val.items()
+        }
     if type(val) == list:
-        return [copy_and_placehold_data(v) for v in val]
+        return [copy_and_placehold_data(v, track_on) for v in val]
     if type(val) == tuple:
-        return tuple([copy_and_placehold_data(v) for v in val])
+        return tuple([copy_and_placehold_data(v, track_on) for v in val])
     if type(val) in (int, float, bool):
         return val
     if type(val) == str:
         return str(val)
     if hasattr(val, '__class__'):
-        m = Proxy(val, [])
+        m = Proxy(val, track_on)
         return m
 
 
@@ -98,33 +101,64 @@ class Proxy(object):
     # proxying (special cases)
     #
     def __getattribute__(self, name):
+        if not object.__getattribute__(self, "_track_on")[0]:
+            return getattr(object.__getattribute__(self, "_obj"), name)
+        object.__getattribute__(self, "_track_on")[0] = False
         output = getattr(object.__getattribute__(self, "_obj"), name)
-        if name == "__class__":
-            return output
-        return_value = copy_and_placehold_data(output)
+        # if name == "__class__":
+        #     return output
+        return_value = copy_and_placehold_data(output,
+                                               object.__getattribute__(
+                                                   self, "_track_on"))
         return_value_copy = copy_call_data(return_value)
         object.__getattribute__(self, "_get_data").append(
             GETATTR_DATA(name, return_value_copy))
+        object.__getattribute__(self, "_track_on")[0] = True
         return return_value
 
     def __delattr__(self, name):
+        if not object.__getattribute__(self, "_track_on")[0]:
+            delattr(object.__getattribute__(self, "_obj"), name)
+        object.__getattribute__(self, "_track_on")[0] = False
         delattr(object.__getattribute__(self, "_obj"), name)
+        object.__getattribute__(self, "_track_on")[0] = True
 
     def __setattr__(self, name, value):
-        set_value = copy_and_placehold_data(value)
+        if not object.__getattribute__(self, "_track_on")[0]:
+            return setattr(object.__getattribute__(self, "_obj"), name, value)
+        object.__getattribute__(self, "_track_on")[0] = False
+        set_value = copy_and_placehold_data(value,
+                                            object.__getattribute__(
+                                                self, "_track_on"))
         set_value_copy = copy_call_data(set_value)
         setattr(object.__getattribute__(self, "_obj"), name, set_value)
         object.__getattribute__(self, "_set_data").append(
             SETATTR_DATA(name, set_value_copy))
+        object.__getattribute__(self, "_track_on")[0] = True
 
     def __nonzero__(self):
-        return bool(object.__getattribute__(self, "_obj"))
+        if not object.__getattribute__(self, "_track_on")[0]:
+            bool(object.__getattribute__(self, "_obj"))
+        object.__getattribute__(self, "_track_on")[0] = False
+        res = bool(object.__getattribute__(self, "_obj"))
+        object.__getattribute__(self, "_track_on")[0] = True
+        return res
 
     def __str__(self):
-        return str(object.__getattribute__(self, "_obj"))
+        if not object.__getattribute__(self, "_track_on")[0]:
+            return str(object.__getattribute__(self, "_obj"))
+        object.__getattribute__(self, "_track_on")[0] = False
+        res = str(object.__getattribute__(self, "_obj"))
+        object.__getattribute__(self, "_track_on")[0] = True
+        return res
 
     def __repr__(self):
-        return repr(object.__getattribute__(self, "_obj"))
+        if not object.__getattribute__(self, "_track_on")[0]:
+            return repr(object.__getattribute__(self, "_obj"))
+        object.__getattribute__(self, "_track_on")[0] = False
+        res = repr(object.__getattribute__(self, "_obj"))
+        object.__getattribute__(self, "_track_on")[0] = True
+        return res
 
     #
     # factories
@@ -214,17 +248,29 @@ class Proxy(object):
 
         def make_method(name):
             def method(self, *args, **kw):
-                args_value = copy_and_placehold_data(args)
+                if not object.__getattribute__(self, "_track_on")[0]:
+                    return getattr(
+                        object.__getattribute__(self, "_obj"), name)(*args,
+                                                                     **kw)
+                object.__getattribute__(self, "_track_on")[0] = False
+                args_value = copy_and_placehold_data(args,
+                                                     object.__getattribute__(
+                                                         self, "_track_on"))
                 args_value_copy = copy_call_data(args_value)
-                kwargs_value = copy_and_placehold_data(kw)
+                kwargs_value = copy_and_placehold_data(kw,
+                                                       object.__getattribute__(
+                                                           self, "_track_on"))
                 kwargs_value_copy = copy_call_data(kwargs_value)
                 output = getattr(object.__getattribute__(self, "_obj"),
                                  name)(*args_value, **kwargs_value)
-                output_value = copy_and_placehold_data(output)
+                output_value = copy_and_placehold_data(output,
+                                                       object.__getattribute__(
+                                                           self, "_track_on"))
                 output_value_copy = copy_call_data(output_value)
                 object.__getattribute__(self, "_special_data").append(
                     SPECIAL_ATTR_DATA(name, args_value_copy, kwargs_value_copy,
                                       output_value_copy))
+                object.__getattribute__(self, "_track_on")[0] = True
                 return output_value
 
             return method
@@ -260,9 +306,13 @@ class Proxy(object):
 
 def track_class():
     def method_wrapper_outer(fnc, list_of_calls, write_testcases):
+        if "@pytest_ar" in globals().keys():
+            return fnc
+
         def method_wrapper(*args, **kwargs):
-            args = copy_and_placehold_data(args)
-            kwargs = copy_and_placehold_data(kwargs)
+            track_on = [True]
+            args = copy_and_placehold_data(args, track_on)
+            kwargs = copy_and_placehold_data(kwargs, track_on)
             result = fnc(*copy_call_data(args), **copy_call_data(kwargs))
             call_data = CALL_DATA(
                 args=[serialize_value(arg) for arg in args],

@@ -1,4 +1,4 @@
-from collections import namedtuple, Counter
+from collections import namedtuple, Counter, defaultdict
 import sys
 import os
 import autopep8
@@ -348,7 +348,8 @@ class DependencyTracker(object):
         self.dependencies = []
         self.num_occurence = Counter()
         self.prim = False
-        self.asserts = []
+        self.asserts = defaultdict(list)
+        self.called = Counter()
 
     def add(self, value, hint="id"):
         if self.prim:
@@ -366,14 +367,28 @@ class DependencyTracker(object):
         return self.dependencies
 
     def get_asserts(self):
-        return self.asserts
+        return [
+            "{}.assert_has_calls([{}])".format(identifier, ", ".join([
+                "call(*{}, **{})".format(args, kwargs)
+                for (args, kwargs) in arguments
+            ])) for identifier, arguments in self.asserts.items()
+        ] + [
+            "assert {}.call_count == {}".format(k, v)
+            for k, v in self.called.items()
+        ]
+#        return self.asserts
 
     def assert_called(self, identifier, arguments=None):
-        if arguments:
-            self.asserts.append("{}.assert_called_with(*{}, **{})".format(
-                identifier, arguments[0], arguments[1]))
-        else:
-            self.asserts.append("{}.assert_called_once()".format(identifier))
+        if arguments is not None:
+            self.asserts[identifier].append(arguments)
+        self.called[identifier] += 1
+
+
+#        if arguments:
+#            self.asserts.append("{}.assert_called_once_with(*{}, **{})".format(
+#                identifier, arguments[0], arguments[1]))
+#        else:
+#            self.asserts.append("{}.assert_called_once()".format(identifier))
 
 
 def track_class():
@@ -416,7 +431,7 @@ def track_class():
             if "@pytest_ar" in globals().keys():
                 return
             file_handle = StringIO()
-            file_handle.write("""from mock import MagicMock
+            file_handle.write("""from mock import MagicMock, call
 from {module_import_path} import {class_name}
 
 class Test{class_name}(object):

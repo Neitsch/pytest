@@ -1,3 +1,6 @@
+from test_in_prod import track_class
+
+@track_class()
 class HelperClass(object):
     def __init__(self, number=6):
         self.hello = []

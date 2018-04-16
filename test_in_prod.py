@@ -391,7 +391,7 @@ class DependencyTracker(object):
 #            self.asserts.append("{}.assert_called_once()".format(identifier))
 
 
-def track_class():
+def track_class(thorough=True):
     def method_wrapper_outer(fnc, list_of_calls, write_testcases):
         if "@pytest_ar" in globals().keys():
             return fnc
@@ -466,6 +466,10 @@ class Test{class_name}(object):
                 "aggressive": 10,
                 "experimental": True
             })
+            if thorough:
+                #print(list_of_calls)
+                for call_data in list_of_calls:
+                    print(call_data.args)
             with open("test_{}.py".format(class_obj.__name__),
                       "w") as real_file:
                 real_file.write(res)

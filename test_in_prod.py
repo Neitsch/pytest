@@ -508,7 +508,8 @@ class Test{class_name}(object):
                     call_data_args_list = list(call_data.args)
                     for idx,arg_val in enumerate(call_data.args):
                         if(arg_val != 'arg'):
-                            for fuzz_arg in fuzz_val(arg_val):
+                            for fuzz_arg in fuzz_val(eval(arg_val)):
+                                fuzz_arg = fuzz_arg if fuzz_arg != '' else "''"
                                 call_data_args_list[idx] = str(fuzz_arg)
                                 call_data_args = ", ".join(call_data_args_list)
                                 call_data_kwargs = (", " + ", ".join(\
@@ -526,6 +527,7 @@ class Test{class_name}(object):
                                     continue
                                 else:
                                     seen_testcases.add(testcase_key)
+
                                 file_handle.write(
                                     """   def test_{function_name}_thorough_fuzz_{counter}(self):
     {dependencies}
@@ -549,8 +551,26 @@ class Test{class_name}(object):
                                 "experimental": True
                             })
 
-                            for metamorph_arg in metamorphic_change(arg_val):
+                            for metamorph_arg in metamorphic_change(eval(arg_val)):
+                                metamorph_arg = metamorph_arg if metamorph_arg != '' else "''"
                                 call_data_args_list[idx] = str(metamorph_arg)
+                                call_data_args = ", ".join(call_data_args_list)
+                                call_data_kwargs = (", " + ", ".join(\
+                                    ["{}={}".format(k, a) for k, a in call_data.kwargs]))\
+                                    if call_data.kwargs else ""
+
+                                testcase_key = (call_data.function.__qualname__,
+                                                call_data.function.__name__,
+                                                call_data_args,
+                                                class_obj.__name__,
+                                                call_data_kwargs
+                                                )
+
+                                if testcase_key in seen_testcases:
+                                    continue
+                                else:
+                                    seen_testcases.add(testcase_key)
+                                    
                                 file_handle.write(
                                     """   def test_{function_name}_thorough_metamorphic_{counter}(self):
     {dependencies}

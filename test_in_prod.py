@@ -14,6 +14,26 @@ SPECIAL_ATTR_DATA = namedtuple("SpecialAttrData",
 PRIMITIVES = (int, float, bool)
 ALL_PRIMITIVES = (int, float, bool, str)
 
+TYPES = [list, dict, tuple, int, float, bool, complex, str]
+
+def fuzz_val(val):
+    fuzz_vals = []
+    for val_type in TYPES:
+        if(type(val) == val_type): continue
+        fuzz_vals.append(val_type())
+    return fuzz_vals
+
+def metamorphic_change(val):
+    if type(val) == bool:
+        return [not val]
+    elif type(val) in (int, float, complex):
+        return [-1*val, 2*val]
+    elif type(val) == list:
+        return [[],list(reversed(val))]
+    elif type(val) == str:
+        return ["",val.lower(), val.upper()]
+    else:
+        return []
 
 def serialize_value(val, dep_tracker, name_hint=None):
     if val is None:
@@ -391,7 +411,7 @@ class DependencyTracker(object):
 #            self.asserts.append("{}.assert_called_once()".format(identifier))
 
 
-def track_class(thorough=True):
+def track_class(thorough=True, trusted=True):
     def method_wrapper_outer(fnc, list_of_calls, write_testcases):
         if "@pytest_ar" in globals().keys():
             return fnc
@@ -469,7 +489,66 @@ class Test{class_name}(object):
             if thorough:
                 #print(list_of_calls)
                 for call_data in list_of_calls:
-                    print(call_data.args)
+                    call_data_args_list = list(call_data.args)
+                    for idx,arg_val in enumerate(call_data.args):
+                        if(arg_val != 'arg'):
+                            for fuzz_arg in fuzz_val(arg_val):
+                                call_data_args_list[idx] = str(fuzz_arg)
+                                file_handle.write(
+                                    """   def test_{function_name}_thorough_fuzz_{counter}(self):
+    {dependencies}
+    try:
+        {function_call}({args}{kwargs})
+    except e:
+        print(e)
+    {asserts}
+""".format(function_call=call_data.function.__qualname__,
+                                function_name=call_data.function.__name__,
+                                counter=counter,
+                                dependencies="\n    ".join(call_data.dependencies.get_lines()),
+                                output=call_data.output,
+                                args=", ".join(call_data_args_list),
+                                class_name=class_obj.__name__,
+                                asserts="\n    ".join(call_data.dependencies.get_asserts()),
+                                kwargs=(", " + ", ".join(
+                                ["{}={}".format(k, a) for k, a in call_data.kwargs]))
+                                if call_data.kwargs else ""))
+                                counter += 1
+                            res = autopep8.fix_code(file_handle.getvalue(), {
+                                "aggressive": 10,
+                                "experimental": True
+                            })
+
+                            for metamorph_arg in metamorphic_change(arg_val):
+                                call_data_args_list[idx] = str(metamorph_arg)
+                                file_handle.write(
+                                    """   def test_{function_name}_thorough_metamorphic_{counter}(self):
+    {dependencies}
+    try:
+        {function_call}({args}{kwargs})
+    except e:
+        print(e)
+    {asserts}
+""".format(function_call=call_data.function.__qualname__,
+                                function_name=call_data.function.__name__,
+                                counter=counter,
+                                dependencies="\n    ".join(call_data.dependencies.get_lines()),
+                                output=call_data.output,
+                                args=", ".join(call_data_args_list),
+                                class_name=class_obj.__name__,
+                                asserts="\n    ".join(call_data.dependencies.get_asserts()),
+                                kwargs=(", " + ", ".join(
+                                ["{}={}".format(k, a) for k, a in call_data.kwargs]))
+                                if call_data.kwargs else ""))
+                                counter += 1
+                            res = autopep8.fix_code(file_handle.getvalue(), {
+                                "aggressive": 10,
+                                "experimental": True
+                            })
+
+                    #print(", ".join(call_data.args))
+                    #print(", ".join(call_data_args_list))
+
             with open("test_{}.py".format(class_obj.__name__),
                       "w") as real_file:
                 real_file.write(res)

@@ -10,5 +10,7 @@ class HelperClass(object):
         lst.extend(self.hello)
         return lst
 
+    '''
     def another_func(self, str_val):
-        return str_val + str(self.hello[0])
+        return str_val
+    '''

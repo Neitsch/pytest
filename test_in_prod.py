@@ -411,7 +411,7 @@ class DependencyTracker(object):
 #            self.asserts.append("{}.assert_called_once()".format(identifier))
 
 
-def track_class(thorough=True, trusted=True):
+def track_class(thorough=False, trusted=True):
     def method_wrapper_outer(fnc, list_of_calls, write_testcases):
         if "@pytest_ar" in globals().keys():
             return fnc
@@ -451,6 +451,7 @@ def track_class(thorough=True, trusted=True):
             if "@pytest_ar" in globals().keys():
                 return
             file_handle = StringIO()
+            seen_testcases = set()
             file_handle.write("""from mock import MagicMock, call
 from {module_import_path} import {class_name}
 
@@ -465,6 +466,23 @@ class Test{class_name}(object):
             ))
             counter = 0
             for call_data in list_of_calls:
+                call_data_args = ", ".join(call_data.args)
+                call_data_kwargs = (", " + ", ".join(\
+                    ["{}={}".format(k, a) for k, a in call_data.kwargs]))\
+                    if call_data.kwargs else ""
+
+                testcase_key = (call_data.function.__qualname__,
+                                call_data.function.__name__,
+                                call_data_args,
+                                class_obj.__name__,
+                                call_data_kwargs
+                                )
+
+                if testcase_key in seen_testcases:
+                    continue
+                else:
+                    seen_testcases.add(testcase_key)
+
                 file_handle.write(
                     """   def test_{function_name}_{counter}(self):
     {dependencies}
@@ -475,12 +493,10 @@ class Test{class_name}(object):
                 counter=counter,
                 dependencies="\n    ".join(call_data.dependencies.get_lines()),
                 output=call_data.output,
-                args=", ".join(call_data.args),
+                args=call_data_args,
                 class_name=class_obj.__name__,
                 asserts="\n    ".join(call_data.dependencies.get_asserts()),
-                kwargs=(", " + ", ".join(
-                ["{}={}".format(k, a) for k, a in call_data.kwargs]))
-                if call_data.kwargs else ""))
+                kwargs=call_data_kwargs))
                 counter += 1
             res = autopep8.fix_code(file_handle.getvalue(), {
                 "aggressive": 10,
@@ -494,6 +510,22 @@ class Test{class_name}(object):
                         if(arg_val != 'arg'):
                             for fuzz_arg in fuzz_val(arg_val):
                                 call_data_args_list[idx] = str(fuzz_arg)
+                                call_data_args = ", ".join(call_data_args_list)
+                                call_data_kwargs = (", " + ", ".join(\
+                                    ["{}={}".format(k, a) for k, a in call_data.kwargs]))\
+                                    if call_data.kwargs else ""
+
+                                testcase_key = (call_data.function.__qualname__,
+                                                call_data.function.__name__,
+                                                call_data_args,
+                                                class_obj.__name__,
+                                                call_data_kwargs
+                                                )
+
+                                if testcase_key in seen_testcases:
+                                    continue
+                                else:
+                                    seen_testcases.add(testcase_key)
                                 file_handle.write(
                                     """   def test_{function_name}_thorough_fuzz_{counter}(self):
     {dependencies}
@@ -507,12 +539,10 @@ class Test{class_name}(object):
                                 counter=counter,
                                 dependencies="\n    ".join(call_data.dependencies.get_lines()),
                                 output=call_data.output,
-                                args=", ".join(call_data_args_list),
+                                args=call_data_args,
                                 class_name=class_obj.__name__,
                                 asserts="\n    ".join(call_data.dependencies.get_asserts()),
-                                kwargs=(", " + ", ".join(
-                                ["{}={}".format(k, a) for k, a in call_data.kwargs]))
-                                if call_data.kwargs else ""))
+                                kwargs=call_data_kwargs))
                                 counter += 1
                             res = autopep8.fix_code(file_handle.getvalue(), {
                                 "aggressive": 10,

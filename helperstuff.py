@@ -1,6 +1,6 @@
 from test_in_prod import track_class
 
-@track_class(thorough=True)
+@track_class(thorough=True, trusted=False)
 class HelperClass(object):
     def __init__(self, number=6):
         self.hello = []
@@ -8,6 +8,7 @@ class HelperClass(object):
 
     def my_func(self, lst):
         lst.extend(self.hello)
+        print('Was I called?' + str(lst))
         return lst
 
     '''

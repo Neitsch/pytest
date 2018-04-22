@@ -4,6 +4,7 @@ import os
 import autopep8
 from io import StringIO
 from functools import reduce
+import traceback
 
 CALL_DATA = namedtuple(
     "CallData", ["args", "kwargs", "output", "function", "dependencies"])
@@ -590,6 +591,44 @@ class Test{class_name}(object):
                                     continue
                                 else:
                                     seen_testcases.add(testcase_key)
+
+                            if(not trusted):
+                                #print('trying something')
+                                print(traceback.print_stack())
+                                output = exec("""from mock import MagicMock, call
+from {module_import_path} import {class_name}
+{dependencies}\n{function_call}({args}{kwargs})""".format(
+                                                module_import_path=os.path.relpath(file_path,
+                                                                                   os.path.commonprefix([
+                                                                                       file_path,
+                                                                                       os.getcwd()
+                                                                                   ]))[:-3].replace("/", "."),
+                                                class_name=class_obj.__name__,
+                                                dependencies="\n    ".join(call_data.dependencies.get_lines()),
+                                                function_call=call_data.function.__qualname__,
+                                                args=call_data_args,
+                                                kwargs=call_data_kwargs))
+                                print(output)
+                                '''
+                                print("\nFor {function_name}:\noutput:\n{output}\ninput:\n{call_data_args}\n"
+                                        .format(function_name=call_data.function.__name__,
+                                                output=call_data.output,
+                                                call_data_args=call_data_args))
+
+                                try:
+                                    resp = input("Is this correct? [y/n]: ").strip()
+                                    print(resp)
+                                    while(not(resp.lower() == 'y' or resp.lower() == 'n' or
+                                        resp.lower() == 'yes' or resp.lower() == 'no')):
+
+                                            resp = input("Invalid input, please enter y or n: ")
+                                    if(resp.lower() == 'n' or resp.lower() == 'no'):
+                                        print('Incorrect execution, moving to next call')
+                                        continue
+                                except:
+                                    print('An error occured, moving to next call')
+                                    continue
+                                '''
 
                                 file_handle.write(
                                     """   def test_{function_name}_thorough_metamorphic_{counter}(self):

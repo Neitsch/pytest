@@ -491,7 +491,6 @@ class Test{class_name}(object):
 
                     try:
                         resp = input("Is this correct? [y/n]: ").strip()
-                        print(resp)
                         while(not(resp.lower() == 'y' or resp.lower() == 'n' or
                             resp.lower() == 'yes' or resp.lower() == 'no')):
 
@@ -523,7 +522,6 @@ class Test{class_name}(object):
                 "experimental": True
             })
             if thorough:
-                #print(list_of_calls)
                 for call_data in list_of_calls:
                     call_data_args_list = list(call_data.args)
                     for idx,arg_val in enumerate(call_data.args):

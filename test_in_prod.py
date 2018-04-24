@@ -551,7 +551,7 @@ class Test{class_name}(object):
     {dependencies}
     try:
         {function_call}({args}{kwargs})
-    except e:
+    except Exception as e:
         print(e)
     {asserts}
 """.format(function_call=call_data.function.__qualname__,
@@ -594,7 +594,7 @@ class Test{class_name}(object):
     {dependencies}
     try:
         {function_call}({args}{kwargs})
-    except e:
+    except Exception as e:
         print(e)
     {asserts}
 """.format(function_call=call_data.function.__qualname__,
